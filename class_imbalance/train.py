@@ -64,7 +64,10 @@ parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
 parser.add_argument('--root_log', type=str, default='class_imbalance/log')
 parser.add_argument('--root_model', type=str, default='class_imbalance/checkpoint')
+parser.add_argument('--width', default=1, type=int)
+
 best_acc1 = 0
+best_acc1_test = 0
 
 
 def main():
@@ -89,7 +92,7 @@ def main():
 
     args.store_name = '_'.join([args.dataset, args.arch, args.loss_type, args.train_rule, args.imb_type,
                                 str(args.imb_factor), str(args.epochs), str(args.seed), str(args.tau),
-                                str(args.gamma), args.exp_str])
+                                str(args.gamma), args.exp_str, str(args.width)])
 
     tf_writer = SummaryWriter(log_dir=os.path.join(args.root_log, args.store_name))
     prepare_folders(args)
@@ -107,7 +110,7 @@ def main_worker(gpu, args, log_writer):
     print("=> creating model '{}'".format(args.arch))
     num_classes = 100 if args.dataset == 'cifar100' else 10
     use_norm = True if args.loss_type == 'LDAM' else False
-    model = models.__dict__[args.arch](num_classes=num_classes, use_norm=use_norm)
+    model = models.__dict__[args.arch](num_classes=num_classes, use_norm=use_norm, width=args.width)
 
     if args.gpu is not None:
         torch.cuda.set_device(args.gpu)
@@ -153,17 +156,28 @@ def main_worker(gpu, args, log_writer):
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
-
+    
+    def split_test_val(val_dataset):
+        test_dataset = deepcopy(val_dataset)
+        x_val, x_test, y_val, y_test = sklearn.model_selection.train_test_split(val_dataset.data, val_dataset.targets, test_size=5000, train_size=5000, random_state=2022)
+        val_dataset.data = x_val
+        val_dataset.targets = y_val
+        test_dataset.data = x_test
+        test_dataset.targets = y_test
+        return val_dataset, test_dataset
+      
     if args.dataset == 'cifar10':
-        train_dataset = IMBALANCECIFAR10(root='./class_imbalance/data', imb_type=args.imb_type, imb_factor=args.imb_factor,
+        train_dataset = IMBALANCECIFAR10(root='/volume00/runtian/data', imb_type=args.imb_type, imb_factor=args.imb_factor,
                                          rand_number=args.rand_number, train=True, download=True,
                                          transform=transform_train)
-        val_dataset = datasets.CIFAR10(root='./class_imbalance/data', train=False, download=True, transform=transform_val)
+        val_dataset = datasets.CIFAR10(root='/volume00/runtian/data', train=False, download=True, transform=transform_val)
+        val_dataset, test_dataset = split_test_val(val_dataset)
     elif args.dataset == 'cifar100':
-        train_dataset = IMBALANCECIFAR100(root='./class_imbalance/data', imb_type=args.imb_type, imb_factor=args.imb_factor,
+        train_dataset = IMBALANCECIFAR100(root='/volume00/runtian/data', imb_type=args.imb_type, imb_factor=args.imb_factor,
                                           rand_number=args.rand_number, train=True, download=True,
                                           transform=transform_train)
-        val_dataset = datasets.CIFAR100(root='./class_imbalance/data', train=False, download=True, transform=transform_val)
+        val_dataset = datasets.CIFAR100(root='/volume00/runtian/data', train=False, download=True, transform=transform_val)
+        val_dataset, test_dataset = split_test_val(val_dataset)
     else:
         warnings.warn('Dataset is not listed')
         return
@@ -184,7 +198,11 @@ def main_worker(gpu, args, log_writer):
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=100, shuffle=False,
         num_workers=args.workers, pin_memory=True)
-
+    
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=100, shuffle=False,
+        num_workers=args.workers, pin_memory=True)
+    
     # init log for training
     log_training = open(os.path.join(args.root_log, args.store_name, 'log_train.csv'), 'w')
     log_testing = open(os.path.join(args.root_log, args.store_name, 'log_test.csv'), 'w')
@@ -245,11 +263,17 @@ def main_worker(gpu, args, log_writer):
         train(train_loader, model, criterion, optimizer, epoch, args, log_training, log_writer)
 
         # evaluate on validation set
+        print('=== Validation ===')
         acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, log_writer)
+
+        print('=== Test ===')
+        acc1_test = validate(test_loader, model, criterion, epoch, args, log_testing, log_writer)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
+        if is_best:
+            best_acc1_test = acc1_test
 
         log_writer.add_scalar('acc/test_top1_best', best_acc1, epoch)
         output_best = 'Best Prec@1: %.3f\n' % (best_acc1)
@@ -277,7 +301,8 @@ def main_worker(gpu, args, log_writer):
     tuning_log.flush()
 
     del model
-
+    print('=== Final result ===')
+    print('best_acc1_test = {}'.format(best_acc1_test))
 
 def train(train_loader, model, criterion, optimizer, epoch, args, log, log_writer, flag='train'):
     batch_time = AverageMeter('Time', ':6.3f')
