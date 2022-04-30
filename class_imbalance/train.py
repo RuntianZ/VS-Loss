@@ -15,6 +15,7 @@ from utils import *
 from generate_cifar import IMBALANCECIFAR10, IMBALANCECIFAR100
 from losses import LDAMLoss, VSLoss
 from copy import deepcopy
+import sklearn.model_selection
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
