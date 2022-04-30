@@ -134,8 +134,8 @@ def resnet20():
     return ResNet_s(BasicBlock, [3, 3, 3])
 
 
-def resnet32(num_classes=10, use_norm=False):
-    return ResNet_s(BasicBlock, [5, 5, 5], num_classes=num_classes, use_norm=use_norm)
+def resnet32(**kwargs):
+    return ResNet_s(BasicBlock, [5, 5, 5], **kwargs)
 
 
 def resnet44():
